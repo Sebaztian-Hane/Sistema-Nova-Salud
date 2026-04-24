@@ -1,0 +1,271 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================
+// ENUMS (Tipos de datos controlados)
+// ============================================
+
+enum RolUsuario {
+  ADMIN
+  FARMACEUTICO
+  VENDEDOR
+  ALMACEN
+}
+
+enum MetodoPago {
+  EFECTIVO
+  TARJETA
+  YAPE
+  PLIN
+  TRANSFERENCIA
+}
+
+enum EstadoVenta {
+  COMPLETADA
+  ANULADA
+  PENDIENTE
+}
+
+// ============================================
+// MODELOS PRINCIPALES
+// ============================================
+
+model Laboratorio {
+  id         Int        @id @default(autoincrement())
+  nombre     String     @unique @db.VarChar(100)
+  contacto   String?    @db.VarChar(100)
+  telefono   String?    @db.VarChar(20)
+  productos  Producto[]
+  createdAt  DateTime   @default(now()) @map("created_at")
+  
+  @@map("laboratorios")
+}
+
+model Categoria {
+  id              Int        @id @default(autoincrement())
+  nombre          String     @unique @db.VarChar(100)
+  descripcion     String?    @db.Text
+  requiereReceta  Boolean    @default(false) @map("requiere_receta")
+  productos       Producto[]
+  createdAt       DateTime   @default(now()) @map("created_at")
+  
+  @@map("categorias")
+}
+
+model Presentacion {
+  id         Int        @id @default(autoincrement())
+  nombre     String     @unique @db.VarChar(50)
+  productos  Producto[]
+  createdAt  DateTime   @default(now()) @map("created_at")
+  
+  @@map("presentaciones")
+}
+
+model Producto {
+  id               Int               @id @default(autoincrement())
+  codigoBarras     String            @unique @map("codigo_barras") @db.VarChar(50)
+  nombreComercial  String            @map("nombre_comercial") @db.VarChar(200)
+  principioActivo  String            @map("principio_activo") @db.VarChar(200)
+  concentracion    String?           @db.VarChar(50)
+  
+  // Relaciones
+  laboratorioId    Int               @map("laboratorio_id")
+  laboratorio      Laboratorio       @relation(fields: [laboratorioId], references: [id])
+  
+  categoriaId      Int               @map("categoria_id")
+  categoria        Categoria         @relation(fields: [categoriaId], references: [id])
+  
+  presentacionId   Int               @map("presentacion_id")
+  presentacion     Presentacion      @relation(fields: [presentacionId], references: [id])
+  
+  // Control de Stock
+  stockMinimo      Int               @default(5) @map("stock_minimo")
+  stockMaximo      Int               @default(50) @map("stock_maximo")
+  
+  // Precios
+  precioCompra     Decimal?          @map("precio_compra") @db.Decimal(10, 2)
+  precioVenta      Decimal           @map("precio_venta") @db.Decimal(10, 2)
+  
+  // Estado
+  activo           Boolean           @default(true)
+  
+  // Relaciones inversas
+  lotes            Lote[]
+  detalleVentas    DetalleVenta[]
+  precioHistorial  PrecioHistorial[]
+  alertasStock     AlertaStock[]
+  
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  
+  // Índices para búsqueda rápida (CRÍTICO para el caso de uso)
+  @@index([nombreComercial])
+  @@index([principioActivo])
+  @@index([laboratorioId])
+  @@index([activo])
+  @@map("productos")
+}
+
+// ⭐ TABLA CRÍTICA: LOTES Y VENCIMIENTOS
+model Lote {
+  id                    Int            @id @default(autoincrement())
+  productoId            Int            @map("producto_id")
+  producto              Producto       @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  
+  numeroLote            String         @map("numero_lote") @db.VarChar(50)
+  fechaVencimiento      DateTime       @map("fecha_vencimiento") @db.Date
+  stockInicial          Int            @map("stock_inicial")
+  stockActual           Int            @map("stock_actual")
+  
+  fechaCompra           DateTime       @default(now()) @map("fecha_compra") @db.Date
+  precioCompraUnitario  Decimal?       @map("precio_compra_unitario") @db.Decimal(10, 2)
+  
+  activo                Boolean        @default(true)
+  
+  // Relación inversa (para saber qué se vendió de este lote)
+  detalleVentas         DetalleVenta[]
+  
+  createdAt             DateTime       @default(now()) @map("created_at")
+  
+  // Un producto no puede tener el mismo número de lote duplicado
+  @@unique([productoId, numeroLote])
+  // Índice para lógica FEFO (Primero en Vencer, Primero en Salir)
+  @@index([fechaVencimiento, stockActual])
+  @@map("lotes")
+}
+
+// Modelo para auditoría de precios
+model PrecioHistorial {
+  id           Int       @id @default(autoincrement())
+  productoId   Int       @map("producto_id")
+  producto     Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  
+  precioAnterior Decimal? @map("precio_anterior") @db.Decimal(10, 2)
+  precioNuevo    Decimal  @map("precio_nuevo") @db.Decimal(10, 2)
+  motivo         String?  @db.VarChar(200)
+  usuarioId      Int?     @map("usuario_id")
+  
+  fechaCambio   DateTime @default(now()) @map("fecha_cambio")
+  
+  @@map("precio_historial")
+}
+
+// Modelo de Clientes (CRM)
+model Cliente {
+  id                  Int       @id @default(autoincrement())
+  dni                 String?   @unique @db.VarChar(20)
+  nombres             String    @db.VarChar(100)
+  apellidos           String?   @db.VarChar(100)
+  telefono            String?   @db.VarChar(20)
+  email               String?   @db.VarChar(100)
+  fechaNacimiento     DateTime? @map("fecha_nacimiento") @db.Date
+  
+  // Datos clínicos relevantes para farmacia
+  alergias            String?   @db.Text
+  enfermedadesCronicas String?  @map("enfermedades_cronicas") @db.Text
+  
+  puntosFidelizacion  Int       @default(0) @map("puntos_fidelizacion")
+  
+  ventas              Venta[]
+  
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  
+  @@index([dni])
+  @@map("clientes")
+}
+
+// Modelo de Ventas (Cabecera del Ticket)
+model Venta {
+  id            Int          @id @default(autoincrement())
+  numeroTicket  String       @unique @map("numero_ticket") @db.VarChar(20)
+  
+  clienteId     Int?         @map("cliente_id")
+  cliente       Cliente?     @relation(fields: [clienteId], references: [id])
+  
+  // Totales
+  subtotal      Decimal      @db.Decimal(10, 2)
+  igv           Decimal      @default(0.00) @db.Decimal(10, 2)
+  total         Decimal      @db.Decimal(10, 2)
+  
+  // Pago
+  metodoPago    MetodoPago   @map("metodo_pago")
+  montoPagado   Decimal?     @map("monto_pagado") @db.Decimal(10, 2)
+  vuelto        Decimal?     @db.Decimal(10, 2)
+  
+  estado        EstadoVenta  @default(COMPLETADA)
+  usuarioId     Int?         @map("usuario_id")
+  observaciones String?      @db.Text
+  
+  detalleVentas DetalleVenta[]
+  
+  createdAt     DateTime     @default(now()) @map("created_at")
+  
+  @@index([createdAt])
+  @@map("ventas")
+}
+
+// Modelo de Detalle de Venta (Items del Ticket)
+model DetalleVenta {
+  id             Int      @id @default(autoincrement())
+  
+  ventaId        Int      @map("venta_id")
+  venta          Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  
+  productoId     Int      @map("producto_id")
+  producto       Producto @relation(fields: [productoId], references: [id])
+  
+  loteId         Int      @map("lote_id")
+  lote           Lote     @relation(fields: [loteId], references: [id])
+  
+  cantidad       Int
+  precioUnitario Decimal  @map("precio_unitario") @db.Decimal(10, 2)
+  descuento      Decimal  @default(0.00) @db.Decimal(10, 2)
+  
+  createdAt      DateTime @default(now()) @map("created_at")
+  
+  @@map("detalle_venta")
+}
+
+// ⭐ TABLA DE ALERTAS (Solución al desabastecimiento)
+model AlertaStock {
+  id                  Int       @id @default(autoincrement())
+  
+  productoId          Int       @map("producto_id")
+  producto            Producto  @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  
+  stockMinimoOverride Int?      @map("stock_minimo_override")
+  stockMaximoOverride Int?      @map("stock_maximo_override")
+  
+  notificarEmail      String?   @map("notificar_email") @db.VarChar(100)
+  ultimaNotificacion  DateTime? @map("ultima_notificacion")
+  
+  activa              Boolean   @default(true)
+  
+  createdAt           DateTime  @default(now()) @map("created_at")
+  
+  @@unique([productoId])
+  @@map("alertas_stock")
+}
+
+// Modelo de Usuarios del Sistema
+model Usuario {
+  id             Int       @id @default(autoincrement())
+  username       String    @unique @db.VarChar(50)
+  passwordHash   String    @map("password_hash") @db.VarChar(255)
+  nombreCompleto String    @map("nombre_completo") @db.VarChar(100)
+  rol            RolUsuario
+  email          String    @unique @db.VarChar(100)
+  activo         Boolean   @default(true)
+  ultimoAcceso   DateTime? @map("ultimo_acceso")
+  
+  createdAt      DateTime  @default(now()) @map("created_at")
+  
+  @@map("usuarios")
+}
